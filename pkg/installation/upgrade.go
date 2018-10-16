@@ -36,13 +36,24 @@ func Upgrade(p environment.Paths, plugin index.Plugin) error {
 		return errors.Errorf("can't upgrade plugin %q, it is not installed", plugin.Name)
 	}
 
-	// Check allowed installation
-	newVersion, uri, fos, binName, err := getDownloadTarget(plugin, oldVersion == headVersion)
-	if oldVersion == newVersion && oldVersion != headVersion {
-		return ErrIsAlreadyUpgraded
+	// TODO(ahmetb) deduplicate
+	goos, goarch := osArch()
+	glog.V(2).Infof("Finding matching (%s/%s) among %d platforms", goos, goarch, len(plugin.Spec.Platforms))
+	platform, ok, err := matchPlatformToSystemEnvs(plugin.Spec.Platforms, goos, goarch)
+	if err != nil {
+		return errors.Wrap(err, "failed to find matching platform")
+	} else if !ok {
+		return errors.Errorf("plugin does not support platform %s/%s", goos, goarch)
 	}
+	glog.V(2).Infof("Found a matching platform for plugin %q", plugin.Name)
+
+	// Check allowed installation
+	newVersion, uri, err := choosePluginVersion(platform, oldVersion == headVersion)
 	if err != nil {
 		return errors.Wrap(err, "failed to get the current download target")
+	}
+	if oldVersion == newVersion && oldVersion != headVersion {
+		return ErrIsAlreadyUpgraded
 	}
 
 	// Move head to save location
@@ -57,7 +68,7 @@ func Upgrade(p environment.Paths, plugin index.Plugin) error {
 
 	// Re-Install
 	glog.V(1).Infof("Installing new version %s", newVersion)
-	if err := install(plugin.Name, newVersion, uri, binName, p, fos, ""); err != nil {
+	if err := install(plugin.Name, newVersion, uri, p.BinPath(), p, platform.Files, ""); err != nil {
 		return errors.Wrap(err, "failed to install new version")
 	}
 

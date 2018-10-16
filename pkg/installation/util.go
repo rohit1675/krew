@@ -30,15 +30,6 @@ import (
 	"github.com/GoogleContainerTools/krew/pkg/pathutil"
 )
 
-// GetMatchingPlatform finds the platform spec in the specified plugin that
-// matches the OS/arch of the current machine (can be overridden via KREW_OS
-// and/or KREW_ARCH).
-func GetMatchingPlatform(p index.Plugin) (index.Platform, bool, error) {
-	os, arch := osArch()
-	glog.V(4).Infof("Using os=%s arch=%s", os, arch)
-	return matchPlatformToSystemEnvs(p, os, arch)
-}
-
 // osArch returns the OS/arch combination to be used on the current system. It
 // can be overridden by setting KREW_OS and/or KREW_ARCH environment variables.
 func osArch() (string, string) {
@@ -53,19 +44,18 @@ func osArch() (string, string) {
 	return goos, goarch
 }
 
-func matchPlatformToSystemEnvs(p index.Plugin, os, arch string) (index.Platform, bool, error) {
+func matchPlatformToSystemEnvs(platforms []index.Platform, os, arch string) (index.Platform, bool, error) {
 	envLabels := labels.Set{
 		"os":   os,
 		"arch": arch,
 	}
-	glog.V(2).Infof("Matching platform for labels(%v)", envLabels)
-	for i, platform := range p.Spec.Platforms {
+	for i, platform := range platforms {
 		sel, err := metav1.LabelSelectorAsSelector(platform.Selector)
 		if err != nil {
 			return index.Platform{}, false, errors.Wrap(err, "failed to compile label selector")
 		}
 		if sel.Matches(envLabels) {
-			glog.V(2).Infof("Found matching platform with index (%d)", i)
+			glog.V(4).Infof("Found matching platform with index (%d)", i)
 			return platform, true, nil
 		}
 	}
@@ -106,31 +96,14 @@ func pluginVersionFromPath(installPath, pluginPath string) (string, error) {
 	return elems[1], nil
 }
 
-func getPluginVersion(p index.Platform, forceHEAD bool) (version, uri string, err error) {
+func choosePluginVersion(p index.Platform, forceHEAD bool) (version, uri string, err error) {
 	if (forceHEAD && p.Head != "") || (p.Head != "" && p.Sha256 == "" && p.URI == "") {
 		return headVersion, p.Head, nil
 	}
 	if forceHEAD && p.Head == "" {
 		return "", "", errors.New("can't force HEAD, plugin manifest does not have a \"head\"")
 	}
-	return strings.ToLower(p.Sha256), p.URI, nil
-}
-
-func getDownloadTarget(index index.Plugin, forceHEAD bool) (version, uri string, fos []index.FileOperation, bin string, err error) {
-	p, ok, err := GetMatchingPlatform(index)
-	if err != nil {
-		return "", "", nil, p.Bin, errors.Wrap(err, "failed to get matching platforms")
-	}
-	if !ok {
-		return "", "", nil, p.Bin, errors.New("no matching platform found")
-	}
-	version, uri, err = getPluginVersion(p, forceHEAD)
-	if err != nil {
-		return "", "", nil, p.Bin, errors.Wrap(err, "failed to get the plugin version")
-	}
-	glog.V(4).Infof("Matching plugin version is %s", version)
-
-	return version, uri, p.Files, p.Bin, nil
+	return strings.ToLower(p.Sha256), p.URI, nil // TODO(ahmetb) lowering sha here is not useful. just do case-insensitive match where the comparison happens.
 }
 
 // ListInstalledPlugins returns a list of all name:version for all plugins.

@@ -23,24 +23,26 @@ import (
 // Fetcher is used to get files from a URI.
 type Fetcher interface {
 	// Get gets the file and returns an stream to read the file.
-	Get(uri string) (io.ReadCloser, error)
+	Get() (io.ReadCloser, error)
 }
 
-// HTTPFetcher is used to get a file from a http:// or https:// schema path.
-type HTTPFetcher struct{}
+type httpFetcher struct{ url string }
 
 // Get gets the file and returns an stream to read the file.
-func (HTTPFetcher) Get(uri string) (io.ReadCloser, error) {
-	resp, err := http.Get(uri)
+func (h httpFetcher) Get() (io.ReadCloser, error) {
+	resp, err := http.Get(h.url)
 	if err != nil {
 		return nil, err
 	}
 	return resp.Body, nil
 }
 
+// NewHTTPFetcher is used to get a file from a http:// or https:// schema path.
+func NewHTTPFetcher(url string) Fetcher { return httpFetcher{url: url} }
+
 type fileFetcher struct{ f string }
 
-func (f fileFetcher) Get(_ string) (io.ReadCloser, error) {
+func (f fileFetcher) Get() (io.ReadCloser, error) {
 	return os.Open(f.f)
 }
 

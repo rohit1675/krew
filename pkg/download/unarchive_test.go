@@ -23,14 +23,6 @@ import (
 	"testing"
 )
 
-func testdataPath() string {
-	pwd, err := filepath.Abs(".")
-	if err != nil {
-		panic(err)
-	}
-	return filepath.Join(pwd, "testdata")
-}
-
 func Test_extractZIP(t *testing.T) {
 	tests := []struct {
 		in    string
@@ -133,4 +125,12 @@ func collectFiles(t *testing.T, scanPath string) []string {
 		t.Fatalf("failed to scan extracted dir %v. error=%v", scanPath, err)
 	}
 	return outFiles
+}
+
+func testdataPath() string {
+	pwd, err := filepath.Abs(".")
+	if err != nil {
+		panic(err)
+	}
+	return filepath.Join(pwd, "testdata")
 }

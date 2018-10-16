@@ -14,14 +14,54 @@
 
 package download
 
-import "io"
+import (
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+)
 
-// FakeFetcher is used for testing.
-type FakeFetcher struct {
-	io.ReadCloser
+func TestHTTPFetcher(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	defer srv.Close()
+
+	f := NewHTTPFetcher(srv.URL)
+	out, err := f.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Close()
+	if !called {
+		t.Fatal("request handler not called")
+	}
 }
 
-// Get gets the file and returns an stream to read the file.
-func (ff FakeFetcher) Get(uri string) (io.ReadCloser, error) {
-	return ff.ReadCloser, nil
+func TestFileFetcher(t *testing.T) {
+	f, err := ioutil.TempFile("", "testfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	expected := "hello world"
+	if _, err := fmt.Fprintf(f, expected); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	ff := NewFileFetcher(f.Name())
+	out, err := ff.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	if v, err := ioutil.ReadAll(out); err != nil {
+		t.Fatal(err)
+	} else if string(v) != expected {
+		t.Fatalf("got=%q expected=%q", string(v), expected)
+	}
 }

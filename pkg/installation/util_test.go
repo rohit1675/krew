@@ -63,30 +63,21 @@ func Test_matchPlatformToSystemEnvs(t *testing.T) {
 		Files: nil,
 	}
 
-	type args struct {
-		i index.Plugin
-	}
 	tests := []struct {
 		name         string
-		args         args
+		args         []index.Platform
 		wantPlatform index.Platform
 		wantFound    bool
 		wantErr      bool
 	}{
 		{
 			name: "Test Matching Index",
-			args: args{
-				i: index.Plugin{
-					Spec: index.PluginSpec{
-						Platforms: []index.Platform{
-							matchingPlatform, {
-								Head: "B",
-								Selector: &v1.LabelSelector{
-									MatchLabels: map[string]string{
-										"os": "None",
-									},
-								},
-							},
+			args: []index.Platform{
+				matchingPlatform, {
+					Head: "B",
+					Selector: &v1.LabelSelector{
+						MatchLabels: map[string]string{
+							"os": "None",
 						},
 					},
 				},
@@ -96,18 +87,12 @@ func Test_matchPlatformToSystemEnvs(t *testing.T) {
 			wantErr:      false,
 		}, {
 			name: "Test Matching Index Not Found",
-			args: args{
-				i: index.Plugin{
-					Spec: index.PluginSpec{
-						Platforms: []index.Platform{
-							{
-								Head: "B",
-								Selector: &v1.LabelSelector{
-									MatchLabels: map[string]string{
-										"os": "None",
-									},
-								},
-							},
+			args: []index.Platform{
+				{
+					Head: "B",
+					Selector: &v1.LabelSelector{
+						MatchLabels: map[string]string{
+							"os": "None",
 						},
 					},
 				},
@@ -119,7 +104,7 @@ func Test_matchPlatformToSystemEnvs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotPlatform, gotFound, err := matchPlatformToSystemEnvs(tt.args.i, "foo", "amdBar")
+			gotPlatform, gotFound, err := matchPlatformToSystemEnvs(tt.args, "foo", "amdBar")
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetMatchingPlatform() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -134,7 +119,7 @@ func Test_matchPlatformToSystemEnvs(t *testing.T) {
 	}
 }
 
-func Test_getPluginVersion(t *testing.T) {
+func Test_choosePluginVersion(t *testing.T) {
 	type args struct {
 		p         index.Platform
 		forceHEAD bool
@@ -199,115 +184,15 @@ func Test_getPluginVersion(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotVersion, gotURI, err := getPluginVersion(tt.args.p, tt.args.forceHEAD)
+			gotVersion, gotURI, err := choosePluginVersion(tt.args.p, tt.args.forceHEAD)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("getPluginVersion() gotVersion = %v, want %v, got err = %v want err = %v", gotVersion, tt.wantVersion, err, tt.wantErr)
+				t.Errorf("choosePluginVersion() gotVersion = %v, want %v, got err = %v want err = %v", gotVersion, tt.wantVersion, err, tt.wantErr)
 			}
 			if gotVersion != tt.wantVersion {
-				t.Errorf("getPluginVersion() gotVersion = %v, want %v", gotVersion, tt.wantVersion)
+				t.Errorf("choosePluginVersion() gotVersion = %v, want %v", gotVersion, tt.wantVersion)
 			}
 			if gotURI != tt.wantURI {
-				t.Errorf("getPluginVersion() gotURI = %v, want %v", gotURI, tt.wantURI)
-			}
-		})
-	}
-}
-
-func Test_getDownloadTarget(t *testing.T) {
-	matchingPlatform := index.Platform{
-		Head:   "https://head.git",
-		URI:    "https://uri.git",
-		Sha256: "deadbeef",
-		Selector: &v1.LabelSelector{
-			MatchLabels: map[string]string{
-				"os": runtime.GOOS,
-			},
-		},
-		Bin:   "kubectl-foo",
-		Files: nil,
-	}
-	type args struct {
-		index     index.Plugin
-		forceHEAD bool
-	}
-	tests := []struct {
-		name        string
-		args        args
-		wantVersion string
-		wantURI     string
-		wantFos     []index.FileOperation
-		wantBin     string
-		wantErr     bool
-	}{
-		{
-			name: "Find Matching Platform",
-			args: args{
-				forceHEAD: true,
-				index: index.Plugin{
-					Spec: index.PluginSpec{
-						Platforms: []index.Platform{
-							matchingPlatform,
-							{
-								Head: "https://wrong.com",
-								Selector: &v1.LabelSelector{
-									MatchLabels: map[string]string{
-										"os": "None",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			wantVersion: "HEAD",
-			wantURI:     "https://head.git",
-			wantFos:     nil,
-			wantBin:     "kubectl-foo",
-			wantErr:     false,
-		}, {
-			name: "No Matching Platform",
-			args: args{
-				forceHEAD: true,
-				index: index.Plugin{
-					Spec: index.PluginSpec{
-						Platforms: []index.Platform{
-							{
-								Head: "https://wrong.com",
-								Selector: &v1.LabelSelector{
-									MatchLabels: map[string]string{
-										"os": "None",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			wantVersion: "",
-			wantURI:     "",
-			wantFos:     nil,
-			wantBin:     "",
-			wantErr:     true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotVersion, gotURI, gotFos, bin, err := getDownloadTarget(tt.args.index, tt.args.forceHEAD)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("getDownloadTarget() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if gotVersion != tt.wantVersion {
-				t.Errorf("getDownloadTarget() gotVersion = %v, want %v", gotVersion, tt.wantVersion)
-			}
-			if bin != tt.wantBin {
-				t.Errorf("getDownloadTarget() bin = %v, want %v", bin, tt.wantBin)
-			}
-			if gotURI != tt.wantURI {
-				t.Errorf("getDownloadTarget() gotURI = %v, want %v", gotURI, tt.wantURI)
-			}
-			if !reflect.DeepEqual(gotFos, tt.wantFos) {
-				t.Errorf("getDownloadTarget() gotFos = %v, want %v", gotFos, tt.wantFos)
+				t.Errorf("choosePluginVersion() gotURI = %v, want %v", gotURI, tt.wantURI)
 			}
 		})
 	}

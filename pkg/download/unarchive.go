@@ -17,37 +17,26 @@ package download
 import (
 	"archive/tar"
 	"archive/zip"
-	"bytes"
 	"compress/gzip"
 	"io"
-	"io/ioutil"
 	"os"
-	"path"
 	"path/filepath"
-	"strings"
 
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
 )
 
-// download gets a file from the internet in memory and writes it content
-// to a verifier.
-func download(url string, verifier verifier, fetcher Fetcher) (io.ReaderAt, int64, error) {
-	glog.V(2).Infof("Fetching %q", url)
-	body, err := fetcher.Get(url)
-	if err != nil {
-		return nil, 0, errors.Wrapf(err, "could not download %q", url)
-	}
-	defer body.Close()
+// Unarchiver describes an archive extractor.
+type Unarchiver func(dst string, r io.ReaderAt, size int64) error
 
-	glog.V(3).Infof("Reading download data into memory")
-	data, err := ioutil.ReadAll(io.TeeReader(body, verifier))
-	if err != nil {
-		return nil, 0, errors.Wrap(err, "could not read download content")
-	}
-	glog.V(2).Infof("Read %d bytes of download data into memory", len(data))
+// NewZIPUnarchiver returns a .zip unarchiver.
+func NewZIPUnarchiver() Unarchiver { return extractZIP }
 
-	return bytes.NewReader(data), int64(len(data)), verifier.Verify()
+// NewTARGZUnarchiver returns a .tar.gz unarchiver.
+func NewTARGZUnarchiver() Unarchiver {
+	return func(dst string, r io.ReaderAt, size int64) error {
+		return extractTARGZ(dst, io.NewSectionReader(r, 0, size))
+	}
 }
 
 // extractZIP extracts a zip file into the target directory.
@@ -135,42 +124,4 @@ func extractTARGZ(targetDir string, in io.Reader) error {
 	}
 	glog.V(4).Infof("tar extraction to %s complete", targetDir)
 	return nil
-}
-
-// GetWithSha256 downloads a zip, verifies it and extracts it to the dir.
-func GetWithSha256(uri, dir, sha string, fetcher Fetcher) error {
-	name := path.Base(uri)
-	body, size, err := download(uri, newSha256Verifier(sha), fetcher)
-	if err != nil {
-		return err
-	}
-	return extractArchive(name, dir, body, size)
-}
-
-// GetInsecure downloads a zip and extracts it to the dir.
-func GetInsecure(uri, dir string, fetcher Fetcher) error {
-	name := path.Base(uri)
-	body, size, err := download(uri, newTrueVerifier(), fetcher)
-	if err != nil {
-		return err
-	}
-	return extractArchive(name, dir, body, size)
-}
-
-func extractArchive(filename, dst string, r io.ReaderAt, size int64) error {
-	// TODO(ahmetb) This package is not architected well, this method should not
-	// be receiving this many args. Primary problem is at GetInsecure and
-	// GetWithSha256 methods that embed extraction in them, which is orthogonal.
-
-	// TODO(ahmetb) write tests with this by mocking extractZIP function into a
-	// zipExtractor variable and check its execution.
-
-	if strings.HasSuffix(filename, ".zip") {
-		glog.V(4).Infof("detected .zip file")
-		return extractZIP(dst, r, size)
-	} else if strings.HasSuffix(filename, ".tar.gz") {
-		glog.V(4).Infof("detected .tar.gz file")
-		return extractTARGZ(dst, io.NewSectionReader(r, 0, size))
-	}
-	return errors.Errorf("cannot infer a supported archive type from filename in the url (%q)", filename)
 }

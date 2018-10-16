@@ -16,7 +16,6 @@ package installation
 
 import (
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -149,33 +148,6 @@ func moveAllFiles(fromDir, toDir string, fos []index.FileOperation) error {
 		}
 	}
 	return nil
-}
-
-func moveToInstallDir(download, pluginDir, version string, fos []index.FileOperation) (string, error) {
-	glog.V(4).Infof("Creating plugin dir %q", pluginDir)
-	if err := os.MkdirAll(pluginDir, 0755); err != nil {
-		return "", errors.Wrapf(err, "error creating path to %q", pluginDir)
-	}
-
-	tempdir, err := ioutil.TempDir("", "krew-temp-move")
-	glog.V(4).Infof("Creating temp plugin move operations dir %q", tempdir)
-	if err != nil {
-		return "", errors.Wrap(err, "failed to find a temporary director")
-	}
-	defer os.RemoveAll(tempdir)
-
-	if err = moveAllFiles(download, tempdir, fos); err != nil {
-		return "", errors.Wrap(err, "failed to move files")
-	}
-
-	installPath := filepath.Join(pluginDir, version)
-	glog.V(2).Infof("Move directory %q to %q", tempdir, installPath)
-	if err = moveOrCopyDir(tempdir, installPath); err != nil {
-		defer os.Remove(installPath)
-		return "", errors.Wrapf(err, "could not rename file from %q to %q", tempdir, installPath)
-	}
-
-	return installPath, nil
 }
 
 // moveOrCopyDir will try to rename a dir or file. If rename is not supported a

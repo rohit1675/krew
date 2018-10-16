@@ -20,7 +20,7 @@ import (
 	"testing"
 )
 
-func TestSha256Verifier(t *testing.T) {
+func TestNewSHA256Verifier(t *testing.T) {
 	type args struct {
 		hash string
 	}
@@ -49,17 +49,17 @@ func TestSha256Verifier(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := newSha256Verifier(tt.args.hash)
+			v := NewSHA256Verifier(tt.args.hash)
 			io.Copy(v, bytes.NewReader(tt.write))
 			if err := v.Verify(); (err != nil) != tt.wantError {
-				t.Errorf("newSha256Verifier().Write(%x).Verify() = %v, want %v", tt.write, err, tt.wantError)
+				t.Errorf("NewSHA256Verifier().Write(%x).Verify() = %v, want %v", tt.write, err, tt.wantError)
 				return
 			}
 		})
 	}
 }
 
-func TestTrueVerifier(t *testing.T) {
+func TestNewTrueVerifier(t *testing.T) {
 	tests := []struct {
 		name      string
 		write     []byte
@@ -83,10 +83,10 @@ func TestTrueVerifier(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := newTrueVerifier()
+			v := NewTrueVerifier()
 			io.Copy(v, bytes.NewReader(tt.write))
 			if err := v.Verify(); (err != nil) != tt.wantError {
-				t.Errorf("newTrueVerifier().Write(%x).Verify() = %v, want %v", tt.write, err, tt.wantError)
+				t.Errorf("NewTrueVerifier().Write(%x).Verify() = %v, want %v", tt.write, err, tt.wantError)
 				return
 			}
 		})

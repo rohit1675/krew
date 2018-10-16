@@ -15,6 +15,9 @@
 package installation
 
 import (
+	"bytes"
+	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -42,71 +45,127 @@ const (
 	krewPluginName = "krew"
 )
 
-func downloadAndMove(version, uri string, fos []index.FileOperation, downloadPath, installPath, forceDownloadFile string) (dst string, err error) {
-	glog.V(3).Infof("Creating download dir %q", downloadPath)
-	if err = os.MkdirAll(downloadPath, 0755); err != nil {
-		return "", errors.Wrapf(err, "could not create download path %q", downloadPath)
-	}
-	defer os.RemoveAll(downloadPath)
-
-	var fetcher download.Fetcher = download.HTTPFetcher{}
-	if forceDownloadFile != "" {
-		fetcher = download.NewFileFetcher(forceDownloadFile)
-	}
-
-	if version == headVersion {
-		glog.V(1).Infof("Getting latest version from HEAD without sha256 verification")
-		err = download.GetInsecure(uri, downloadPath, fetcher)
-	} else {
-		glog.V(1).Infof("Getting sha256 (%s) signed version", version)
-		err = download.GetWithSha256(uri, downloadPath, version, fetcher)
-	}
-	if err != nil {
-		return "", errors.Wrap(err, "failed to download and verify file")
-	}
-
-	return moveToInstallDir(downloadPath, installPath, version, fos)
-}
-
 // Install will download and install a plugin. The operation tries
 // to not get the plugin dir in a bad state if it fails during the process.
 func Install(p environment.Paths, plugin index.Plugin, forceHEAD bool, forceDownloadFile string) error {
-	glog.V(2).Infof("Looking for installed versions")
-	_, ok, err := findInstalledPluginVersion(p.InstallPath(), p.BinPath(), plugin.Name)
+	name := plugin.Name
+	glog.V(2).Infof("Looking for installed versions of %q", name)
+	_, ok, err := findInstalledPluginVersion(p.InstallPath(), p.BinPath(), name)
 	if err != nil {
 		return err
-	}
-	if ok {
+	} else if ok {
 		return ErrIsAlreadyInstalled
 	}
+	glog.V(2).Infof("Plugin %q not installed", name)
 
-	glog.V(1).Infof("Finding download target for plugin %s", plugin.Name)
-	version, uri, fos, bin, err := getDownloadTarget(plugin, forceHEAD)
+	userOS, userArch := osArch()
+	glog.V(2).Infof("Finding matching (%s/%s) among %d platforms", userOS, userArch, len(plugin.Spec.Platforms))
+	platform, ok, err := matchPlatformToSystemEnvs(plugin.Spec.Platforms, userOS, userArch)
+	if err != nil {
+		return errors.Wrap(err, "failed to find matching platform")
+	} else if !ok {
+		return errors.Errorf("plugin does not support platform %s/%s", userOS, userArch)
+	}
+	glog.V(2).Infof("Found a matching platform for plugin %q", name)
+
+	version, downloadURL, err := choosePluginVersion(platform, forceHEAD)
+	if err != nil {
+		return errors.Wrap(err, "could not choose a version to download")
+	}
+	if forceDownloadFile != "" {
+		glog.V(1).Infof("Overriding download url with local file=%s", forceDownloadFile)
+		downloadURL = forceDownloadFile
+	}
+	glog.V(2).Infof("Chosen version=%s (url=%s) for plugin %q", version, downloadURL, name)
+
+	verifier := initVerifier(version == headVersion, platform.Sha256)
+	unarchiver, err := initUnarchiver(downloadURL)
+	if err != nil {
+		return errors.Wrap(err, "cannot initialize unarchiver")
+	}
+	fetcher := initFetcher(downloadURL, forceDownloadFile)
+
+	body, err := fetcher.Get()
+	if err != nil {
+		return errors.Wrap(err, "download failure")
+	}
+	defer body.Close()
+	glog.V(3).Infof("Reading downloaded file into memory")
+	data, err := ioutil.ReadAll(io.TeeReader(body, verifier))
+	if err != nil {
+		return errors.Wrap(err, "could not read download content")
+	}
+	glog.V(2).Infof("Read %d bytes of download data into memory", len(data))
+	if err := verifier.Verify(); err != nil {
+		return errors.Wrap(err, "download could not be verified")
+	}
+	extractDir := filepath.Join(p.DownloadPath(), name)
+	glog.V(2).Infof("Unarchiving downloaded file. dst=%s", extractDir)
+	if err := unarchiver(extractDir, bytes.NewReader(data), int64(len(data))); err != nil {
+		return errors.Wrap(err, "extract failure")
+	}
+	glog.V(2).Info("File unarchived.")
+
+	stagingDir, err := ioutil.TempDir("", "krew-temp-move")
+	glog.V(4).Infof("Creating staging directory path=%s", stagingDir)
+	if err != nil {
+		return errors.Wrap(err, "failed to find a temporary directory")
+	}
+	defer func() {
+		glog.V(4).Infof("Cleaning up staging directory=%s", stagingDir)
+		os.RemoveAll(stagingDir)
+	}()
+	glog.V(2).Infof("Starting file copy operations (%d)", len(platform.Files))
+	if err = moveAllFiles(extractDir, stagingDir, platform.Files); err != nil {
+		return errors.Wrap(err, "failed to move files")
+	}
+	glog.V(2).Infof("File copy operations complete.")
+
+	installDir := p.PluginVersionInstallPath(name, version)
+	glog.V(2).Infof("Ensuring plugin installation direcotry=%s", installDir)
+	if err := os.MkdirAll(installDir, 0755); err != nil {
+		return errors.Wrap(err, "could not create installation directory")
+	}
+	glog.V(2).Info("Moving staging directory to installation directory.")
+	if err = moveOrCopyDir(stagingDir, installDir); err != nil {
+		defer func() {
+			glog.V(4).Infof("Cleaning up installation directory=%s", installDir)
+			os.Remove(installDir)
+		}()
+		return errors.Wrapf(err, "could not rename from=%q to=%q", stagingDir, installDir)
+	}
+
+	executablePath := filepath.Join(installDir, filepath.FromSlash(platform.Bin))
+	glog.V(4).Infof("Checking if it is safe to create symlink for executable=%s", executablePath)
+	if err := evaluateBinPath(installDir, executablePath); err != nil {
+		return errors.Wrap(err, "symlink unsafe")
+	}
+
+	linkPath := filepath.Join(p.BinPath(), pluginNameToBin(name, isWindows())) // TODO(ahmetb) this should be offered by environment.Paths.
+	glog.V(2).Infof("Creating symlink for plugin %q at=%s", name, linkPath)
+	if err := createOrUpdateLink(executablePath, linkPath); err != nil {
+		return errors.Wrap(err, "cannot link plugin")
+	}
+	glog.V(1).Infof("Symbolic link created at=%s", linkPath)
+	return nil
+}
+
+// evaluateBinPath determines if the given installDir+executablePath path is
+// still within installDir. This prevents creating executable references outside
+// the installation directory.
+func evaluateBinPath(installDir string, executablePath string) error {
+	installDirAbs, err := filepath.Abs(installDir)
 	if err != nil {
 		return err
 	}
-	return install(plugin.Name, version, uri, bin, p, fos, forceDownloadFile)
-}
-
-func install(plugin, version, uri, bin string, p environment.Paths, fos []index.FileOperation, forceDownloadFile string) error {
-	dst, err := downloadAndMove(version, uri, fos, filepath.Join(p.DownloadPath(), plugin), p.PluginInstallPath(plugin), forceDownloadFile)
+	executablePathAbs, err := filepath.Abs(executablePath)
 	if err != nil {
-		return errors.Wrap(err, "failed to dowload and move during installation")
+		return err
 	}
-
-	subPathAbs, err := filepath.Abs(dst)
-	if err != nil {
-		return errors.Wrapf(err, "failed to get the absolute fullPath of %q", dst)
+	if _, ok := pathutil.IsSubPath(installDir, executablePath); !ok {
+		return errors.Wrapf(err, "executable path (%s) is not within installation directory (%d)", executablePath, installDir)
 	}
-	fullPath := filepath.Join(dst, filepath.FromSlash(bin))
-	pathAbs, err := filepath.Abs(fullPath)
-	if err != nil {
-		return errors.Wrapf(err, "failed to get the absolute fullPath of %q", fullPath)
-	}
-	if _, ok := pathutil.IsSubPath(subPathAbs, pathAbs); !ok {
-		return errors.Wrapf(err, "the fullPath %q does not extend the sub-fullPath %q", fullPath, dst)
-	}
-	return createOrUpdateLink(p.BinPath(), filepath.Join(dst, filepath.FromSlash(bin)), plugin)
+	return nil
 }
 
 // Remove will remove a plugin.
@@ -132,24 +191,40 @@ func Remove(p environment.Paths, name string) error {
 	return os.RemoveAll(p.PluginInstallPath(name))
 }
 
-func createOrUpdateLink(binDir string, binary string, plugin string) error {
-	dst := filepath.Join(binDir, pluginNameToBin(plugin, isWindows()))
+func initVerifier(isHEAD bool, checksum string) download.Verifier {
+	if isHEAD {
+		return download.NewTrueVerifier()
+	}
+	return download.NewSHA256Verifier(checksum)
+}
 
+func initUnarchiver(filename string) (download.Unarchiver, error) {
+	if strings.HasSuffix(filename, ".zip") {
+		return download.NewZIPUnarchiver(), nil
+	} else if strings.HasSuffix(filename, ".tar.gz") {
+		return download.NewTARGZUnarchiver(), nil
+	}
+	return nil, errors.Errorf("cannot infer a supported archive type from filename in the url (%q)", filename)
+}
+
+func initFetcher(url, fileOverride string) download.Fetcher {
+	if fileOverride != "" {
+		return download.NewFileFetcher(fileOverride)
+	}
+	return download.NewHTTPFetcher(url)
+}
+
+// createOrUpdateLink ensures a symlink to src at dst.
+func createOrUpdateLink(src string, dst string) error {
 	if err := removeLink(dst); err != nil {
 		return errors.Wrap(err, "failed to remove old symlink")
 	}
-	if _, err := os.Stat(binary); os.IsNotExist(err) {
-		return errors.Wrapf(err, "can't create symbolic link, source binary (%q) cannot be found in extracted archive", binary)
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return errors.Wrapf(err, "executable to be symlinked cannot be found at=%s", src)
 	}
+	err := os.Symlink(src, dst)
+	return errors.Wrap(err, "failed to create a symlink")
 
-	// Create new
-	glog.V(2).Infof("Creating symlink from %q to %q", binary, dst)
-	if err := os.Symlink(binary, dst); err != nil {
-		return errors.Wrapf(err, "failed to create a symlink form %q to %q", binDir, dst)
-	}
-	glog.V(2).Infof("Created symlink at %q", dst)
-
-	return nil
 }
 
 // removeLink removes a symlink reference if exists.

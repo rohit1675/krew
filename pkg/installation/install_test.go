@@ -71,60 +71,6 @@ func Test_moveTargets(t *testing.T) {
 	}
 }
 
-func Test_createOrUpdateLink(t *testing.T) {
-	tempDir, err := ioutil.TempDir(os.TempDir(), "krew-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	type args struct {
-		binDir string
-		binary string
-	}
-	tests := []struct {
-		name       string
-		pluginName string
-		args       args
-		wantErr    bool
-	}{
-		{
-			name:       "normal link",
-			pluginName: "foo",
-			args: args{
-				binDir: tempDir,
-				binary: filepath.Join(testdataPath(t), "plugin-foo", "kubectl-foo"),
-			},
-			wantErr: false,
-		},
-		{
-			name:       "update link",
-			pluginName: "foo",
-			args: args{
-				binDir: tempDir,
-				binary: filepath.Join(testdataPath(t), "plugin-foo", "kubectl-foo"),
-			},
-			wantErr: false,
-		},
-		{
-			name:       "wrong path link",
-			pluginName: "foo",
-			args: args{
-				binDir: tempDir,
-				binary: filepath.Join(testdataPath(t), "plugin-foo", "foo", "not-exist"),
-			},
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := createOrUpdateLink(tt.args.binDir, tt.args.binary, tt.pluginName); (err != nil) != tt.wantErr {
-				t.Errorf("createOrUpdateLink() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
 func Test_pluginNameToBin(t *testing.T) {
 	tests := []struct {
 		name      string
